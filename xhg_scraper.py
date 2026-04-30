@@ -359,10 +359,11 @@ def fetch_pages(args: argparse.Namespace) -> None:
         )
 
     urls = read_urls(args)
-    output_dir = Path(args.output)
+    output_base = Path(args.output)
     config_path = Path(args.config) if args.config else None
     summary_rows = []
     detail_rows = []
+    run_started = datetime.now()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=args.headless)
@@ -381,28 +382,29 @@ def fetch_pages(args: argparse.Namespace) -> None:
                     detail_rows.append(detail_item.to_dict(include_raw=False))
                     print(f"  Parsed: age={detail_item.age}, price={detail_item.price_range}")
 
-            row = write_result(result, output_dir, detail_item)
+            row = write_result(result, output_base, detail_item)
             summary_rows.append(row)
 
             if row["permission_blocked"]:
                 print("  Note: the returned page still contains a permission/login warning.")
             else:
-                print(f"  Done: {row['text_file']}")
+                print(f"  Done: {index}/{len(urls)}")
 
             if args.delay and index < len(urls):
                 time.sleep(args.delay)
 
         browser.close()
 
-    # 写入汇总CSV
-    _write_summary_csv(output_dir, summary_rows, "summary.csv")
-
-    # 写入详情数据CSV
-    if detail_rows:
-        _write_detail_csv(output_dir, detail_rows, "detail_data.csv")
-        _write_detail_json(output_dir, detail_rows, "detail_data.json")
-
+    run_ended = datetime.now()
+    run_dir = _make_run_dir(output_base)
+    _finalize_run(run_dir, summary_rows, detail_rows, {
+        "source": "fetch",
+        "url_count": len(urls),
+        "started": run_started.isoformat(),
+        "ended": run_ended.isoformat(),
+    })
     _print_summary(summary_rows, detail_rows)
+    print(f"  输出目录: {run_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -434,11 +436,11 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
                 base_url = urljoin(config["base_url"], list_url)
                 args.start_url = base_url
 
-    output_dir = Path(args.output)
-    discovered_file = output_dir / "discovered_urls.txt"
+    output_base = Path(args.output)
     start_url = args.start_url or base_url
     all_urls: list[str] = []
     seen = set()
+    run_started = datetime.now()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=args.headless)
@@ -483,11 +485,6 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
             if args.delay and page_number < args.pages:
                 time.sleep(args.delay)
 
-        # 保存发现的URL列表
-        output_dir.mkdir(parents=True, exist_ok=True)
-        discovered_file.write_text("\n".join(all_urls), encoding="utf-8")
-        print(f"Discovered URL file: {discovered_file.resolve()}")
-
         if not all_urls:
             browser.close()
             print("No thread links found. Try passing a forum/list page URL with --start-url.")
@@ -509,71 +506,102 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
                     print(f"  Parsed: age={detail_item.age}, price={detail_item.price_range}, "
                           f"address={detail_item.address[:20] if detail_item.address else 'N/A'}")
 
-            row = write_result(result, output_dir, detail_item)
+            row = write_result(result, output_base, detail_item)
             summary_rows.append(row)
 
             if row["permission_blocked"]:
                 print("  Note: the returned page still contains a permission/login warning.")
             else:
-                print(f"  Done: {row['text_file']}")
+                print(f"  Done: {row['tid']}")
 
             if args.delay and index < len(all_urls):
                 time.sleep(args.delay)
 
         browser.close()
 
-    # 写入汇总CSV
-    _write_summary_csv(output_dir, summary_rows, "summary.csv")
-
-    # 写入详情数据
-    if detail_rows:
-        _write_detail_csv(output_dir, detail_rows, "detail_data.csv")
-        _write_detail_json(output_dir, detail_rows, "detail_data.json")
-
+    run_ended = datetime.now()
+    run_dir = _make_run_dir(output_base)
+    _finalize_run(run_dir, summary_rows, detail_rows, {
+        "region": region_name or "(不限)",
+        "city": city_name or "(不限)",
+        "forum": args.forum or "最新信息",
+        "pages": args.pages,
+        "max_threads": args.max_threads,
+        "discovered_urls": len(all_urls),
+        "started": run_started.isoformat(),
+        "ended": run_ended.isoformat(),
+    })
     _print_summary(summary_rows, detail_rows)
+    print(f"  输出目录: {run_dir}")
 
 
 # ---------------------------------------------------------------------------
 # 输出辅助函数
 # ---------------------------------------------------------------------------
 
-def _write_summary_csv(output_dir: Path, rows: list[dict], filename: str) -> None:
-    """写入采集汇总CSV文件"""
-    if not rows:
-        return
-    summary_file = output_dir / filename
-    with summary_file.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"Summary file: {summary_file.resolve()}")
+def _make_run_dir(output_base: Path, prefix: str = "") -> Path:
+    """
+    在输出基础目录下创建以时间戳命名的子文件夹
+
+    Args:
+        output_base: 输出根目录（如 Path("output")）
+        prefix: 可选前缀（如地区名）
+
+    Returns:
+        Path: 时间戳子目录路径
+    """
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    name = f"{prefix}_{ts}" if prefix else ts
+    run_dir = output_base / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
 
 
-def _write_detail_csv(output_dir: Path, rows: list[dict], filename: str) -> None:
-    """写入详情数据CSV文件"""
+def _write_summary_json(run_dir: Path, summary_rows: list[dict],
+                        detail_rows: list[dict], meta: dict) -> None:
+    """写入summary.json（采集汇总）"""
+    summary = {
+        "meta": meta,
+        "total_pages": len(summary_rows),
+        "parsed_details": len(detail_rows),
+        "permission_blocked": sum(1 for r in summary_rows if r.get("permission_blocked")),
+        "records": summary_rows,
+    }
+    path = run_dir / "summary.json"
+    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Summary: {path.resolve()}")
+
+
+def _write_detail_csv(run_dir: Path, rows: list[dict]) -> None:
+    """写入detail_data.csv"""
     if not rows:
         return
-    detail_file = output_dir / filename
+    path = run_dir / "detail_data.csv"
     fieldnames = [k for k in rows[0].keys() if k != "raw_text"]
-    with detail_file.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=fieldnames)
+    with path.open("w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
-    print(f"Detail CSV file: {detail_file.resolve()}")
+    print(f"Detail CSV: {path.resolve()}")
 
 
-def _write_detail_json(output_dir: Path, rows: list[dict], filename: str) -> None:
-    """写入详情数据JSON文件"""
+def _write_detail_json(run_dir: Path, rows: list[dict]) -> None:
+    """写入detail_data.json（结构化详情汇总）"""
     if not rows:
         return
-    detail_file = output_dir / filename
-    # 移除 raw_text 字段
+    path = run_dir / "detail_data.json"
     clean_rows = [{k: v for k, v in row.items() if k != "raw_text"} for row in rows]
-    detail_file.write_text(
-        json.dumps(clean_rows, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    print(f"Detail JSON file: {detail_file.resolve()}")
+    path.write_text(json.dumps(clean_rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Detail JSON: {path.resolve()}")
+
+
+def _finalize_run(run_dir: Path, summary_rows: list[dict],
+                  detail_rows: list[dict], meta: dict) -> None:
+    """一次写入所有输出文件"""
+    _write_summary_json(run_dir, summary_rows, detail_rows, meta)
+    if detail_rows:
+        _write_detail_csv(run_dir, detail_rows)
+        _write_detail_json(run_dir, detail_rows)
 
 
 def _print_summary(summary_rows: list[dict], detail_rows: list[dict]) -> None:
@@ -624,7 +652,7 @@ def run_from_config(args: argparse.Namespace) -> None:
     max_threads = int(target.get("max_threads", 0))
     # 从 crawl 节读取其他参数
     crawl_config = config.get("crawl", {})
-    output_dir = Path(args.output) if args.output else Path(crawl_config.get("output_dir", "output"))
+    output_base = Path(args.output) if args.output else Path(crawl_config.get("output_dir", "output"))
     delay = float(getattr(args, "delay", None) or crawl_config.get("delay", 1.5))
     timeout = int(getattr(args, "timeout", None) or crawl_config.get("timeout", 60000))
 
@@ -649,12 +677,12 @@ def run_from_config(args: argparse.Namespace) -> None:
     print(f"  板块: {forum_name}")
     print(f"  翻页: {pages} 页")
     print(f"  上限: {'不限制' if max_threads == 0 else str(max_threads) + ' 条'}")
-    print(f"  输出: {output_dir}")
     print("=" * 55)
 
-    # ---- 阶段1：翻列表，收集帖子链接 ----
+    # 阶段1：翻列表，收集帖子链接
     all_urls: list[str] = []
     seen = set()
+    run_started = datetime.now()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=args.headless)
@@ -704,13 +732,7 @@ def run_from_config(args: argparse.Namespace) -> None:
             print("\n未发现任何帖子链接，请检查配置或网站状态。")
             return
 
-        # 保存URL列表
-        output_dir.mkdir(parents=True, exist_ok=True)
-        discovered_file = output_dir / "discovered_urls.txt"
-        discovered_file.write_text("\n".join(all_urls), encoding="utf-8")
-        print(f"\n  共发现 {len(all_urls)} 条帖子链接 → {discovered_file.name}")
-
-        # ---- 阶段2：逐个抓取详情并解析 ----
+        # 阶段2：逐个抓取详情并解析
         print(f"\n>>> 阶段2：抓取详情并解析结构化数据...")
         summary_rows = []
         detail_rows = []
@@ -726,7 +748,7 @@ def run_from_config(args: argparse.Namespace) -> None:
                     print(f"  ✔ age={detail_item.age}, price={detail_item.price_range}, "
                           f"addr={detail_item.address[:25] if detail_item.address else 'N/A'}")
 
-            row = write_result(result, output_dir, detail_item)
+            row = write_result(result, output_base, detail_item)
             summary_rows.append(row)
 
             if row["permission_blocked"]:
@@ -737,12 +759,22 @@ def run_from_config(args: argparse.Namespace) -> None:
 
         browser.close()
 
-    # ---- 阶段3：输出结果 ----
-    _write_summary_csv(output_dir, summary_rows, "summary.csv")
-    if detail_rows:
-        _write_detail_csv(output_dir, detail_rows, "detail_data.csv")
-        _write_detail_json(output_dir, detail_rows, "detail_data.json")
+    # 阶段3：输出结果（时间戳子文件夹）
+    run_ended = datetime.now()
+    region_tag = city_name or region_name or "all"
+    run_dir = _make_run_dir(output_base, region_tag)
+    _finalize_run(run_dir, summary_rows, detail_rows, {
+        "region": region_name or "(不限)",
+        "city": city_name or "(不限)",
+        "forum": forum_name,
+        "pages": pages,
+        "max_threads": max_threads,
+        "discovered_urls": len(all_urls),
+        "started": run_started.isoformat(),
+        "ended": run_ended.isoformat(),
+    })
     _print_summary(summary_rows, detail_rows)
+    print(f"  输出目录: {run_dir}")
 
 
 # ---------------------------------------------------------------------------
