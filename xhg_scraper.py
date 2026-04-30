@@ -23,7 +23,7 @@ import yaml
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
-from detail_parser import DetailItem, DetailParser, load_config, get_region_by_name
+from detail_parser import DetailItem, DetailParser, load_config
 
 # ---------------------------------------------------------------------------
 # 默认常量
@@ -167,13 +167,11 @@ def select_region_on_page(page, region_name: str, timeout: int = 10000) -> bool:
     """
     try:
         page.wait_for_timeout(2000)
-        # 首先尝试展开省份选择面板
         expand_button = page.locator("#psheng_button")
         if expand_button.count() > 0:
             expand_button.click()
             page.wait_for_timeout(500)
 
-        # 查找并点击目标省份
         province_locator = page.get_by_text(region_name, exact=True).first
         if province_locator.count() == 0:
             province_locator = page.locator(f"text={region_name}").first
@@ -181,7 +179,6 @@ def select_region_on_page(page, region_name: str, timeout: int = 10000) -> bool:
         if province_locator.count() > 0:
             province_locator.click()
             page.wait_for_timeout(1500)
-            # 等待列表刷新
             page.wait_for_load_state("networkidle", timeout=timeout)
             return True
 
@@ -189,6 +186,42 @@ def select_region_on_page(page, region_name: str, timeout: int = 10000) -> bool:
         return False
     except Exception as exc:
         print(f"  Warning: Failed to select region '{region_name}': {exc}")
+        return False
+
+
+def select_city_on_page(page, city_name: str, timeout: int = 10000) -> bool:
+    """
+    选中省份后，进一步点击城市名称做二级筛选
+
+    Args:
+        page: Playwright page对象
+        city_name: 城市名称（如"深圳市"、"广州市"）
+        timeout: 等待超时时间（毫秒）
+
+    Returns:
+        bool: 是否成功点击
+    """
+    try:
+        page.wait_for_timeout(1500)
+        expand_button = page.locator("#pshi_button")
+        if expand_button.count() > 0:
+            expand_button.click()
+            page.wait_for_timeout(500)
+
+        city_locator = page.get_by_text(city_name, exact=True).first
+        if city_locator.count() == 0:
+            city_locator = page.locator(f"text={city_name}").first
+
+        if city_locator.count() > 0:
+            city_locator.click()
+            page.wait_for_timeout(1500)
+            page.wait_for_load_state("networkidle", timeout=timeout)
+            return True
+
+        print(f"  Warning: Could not find city '{city_name}' on page.")
+        return False
+    except Exception as exc:
+        print(f"  Warning: Failed to select city '{city_name}': {exc}")
         return False
 
 
@@ -236,59 +269,30 @@ def collect_page(page, url: str, timeout: int) -> dict:
 
 def write_result(result: dict, output_dir: Path, detail_item: Optional[DetailItem] = None) -> dict:
     """
-    将采集结果写入文件（原始文本/HTML/JSON + 结构化详情数据）
+    构建单条结果摘要行（不再写入单独文件，仅收集结构化数据）
 
     Args:
         result: collect_page 返回的结果字典
-        output_dir: 输出目录
+        output_dir: 输出目录（未使用，保留兼容）
         detail_item: 解析后的详情数据结构（可选）
 
     Returns:
-        dict: 写入结果摘要
+        dict: 结果摘要行
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
     tid = result["tid"]
-    base = output_dir / tid
-
-    text_path = base.with_suffix(".txt")
-    html_path = base.with_suffix(".html")
-    json_path = base.with_suffix(".json")
-
-    text_path.write_text(result["text"], encoding="utf-8")
-    html_path.write_text(result["html"], encoding="utf-8")
-
-    serializable = {key: value for key, value in result.items() if key not in {"text", "html"}}
-    json_path.write_text(
-        json.dumps(serializable, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
     row = {
         "tid": tid,
         "title": result["title"],
         "status": result["status"],
         "permission_blocked": result["permission_blocked"],
-        "text_file": str(text_path),
-        "html_file": str(html_path),
-        "json_file": str(json_path),
         "url": result["url"],
     }
-
-    # 写入结构化详情数据
     if detail_item:
-        detail_path = base.with_name(f"{tid}_detail.json")
         detail_dict = detail_item.to_dict(include_raw=False)
-        detail_path.write_text(
-            json.dumps(detail_dict, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        row["detail_file"] = str(detail_path)
-        # 合并详情字段到摘要行
         for key in ("age", "beauty_score", "price_range", "services",
                      "qq", "wechat", "phone", "address",
                      "region_province", "region_city"):
             row[f"detail_{key}"] = detail_dict.get(key, "")
-
     return row
 
 
@@ -417,6 +421,7 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
     config_path = Path(args.config) if args.config else None
     base_url = DEFAULT_START_URL
     region_name = getattr(args, "region", None)
+    city_name = getattr(args, "city", None)
 
     if config_path and config_path.exists():
         config = load_config(str(config_path))
@@ -452,6 +457,12 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
                     print(f"  Region filter applied: {region_name}")
                 else:
                     print(f"  Region filter failed, continuing with unfiltered list.")
+
+            if city_name and page_number == 1:
+                if select_city_on_page(page, city_name, args.timeout):
+                    print(f"  City filter applied: {city_name}")
+                else:
+                    print(f"  City filter failed, continuing...")
 
             page.wait_for_timeout(1500)
             found = extract_thread_urls(page, list_url)
@@ -586,6 +597,155 @@ def _print_summary(summary_rows: list[dict], detail_rows: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# run 模式：从配置文件读取参数，一键执行全流程
+# ---------------------------------------------------------------------------
+
+def run_from_config(args: argparse.Namespace) -> None:
+    """从config.yaml读取target配置，自动完成：选地区→翻列表→抓详情→解析数据"""
+    auth_file = Path(args.auth)
+    if not auth_file.exists():
+        raise FileNotFoundError(
+            f"Login state file not found: {auth_file}. Run first: python xhg_scraper.py login"
+        )
+
+    config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    config = load_config(str(config_path))
+    target = config.get("target", {})
+    base_url = config.get("base_url", DEFAULT_START_URL)
+
+    # 从 target 节读取参数
+    region_name = target.get("region", "").strip()
+    city_name = target.get("city", "").strip()
+    forum_name = target.get("forum", "").strip()
+    pages = int(target.get("pages", 1))
+    max_threads = int(target.get("max_threads", 0))
+    # 从 crawl 节读取其他参数
+    crawl_config = config.get("crawl", {})
+    output_dir = Path(args.output) if args.output else Path(crawl_config.get("output_dir", "output"))
+    delay = float(getattr(args, "delay", None) or crawl_config.get("delay", 1.5))
+    timeout = int(getattr(args, "timeout", None) or crawl_config.get("timeout", 60000))
+
+    # 确定起始URL（根据板块）
+    if forum_name in config.get("forums", {}):
+        forum_cfg = config["forums"][forum_name]
+        start_url = urljoin(base_url, forum_cfg.get("list_url", ""))
+    else:
+        start_url = urljoin(base_url, "forum.php?mod=forumdisplay&fid=2")
+
+    # 打印任务信息
+    location_parts = []
+    if region_name:
+        location_parts.append(region_name)
+    if city_name:
+        location_parts.append(city_name)
+    location_str = " > ".join(location_parts) if location_parts else "(不限)"
+
+    print("=" * 55)
+    print("  寻欢阁爬虫 - 自动采集模式")
+    print(f"  地区: {location_str}")
+    print(f"  板块: {forum_name}")
+    print(f"  翻页: {pages} 页")
+    print(f"  上限: {'不限制' if max_threads == 0 else str(max_threads) + ' 条'}")
+    print(f"  输出: {output_dir}")
+    print("=" * 55)
+
+    # ---- 阶段1：翻列表，收集帖子链接 ----
+    all_urls: list[str] = []
+    seen = set()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=args.headless)
+        context = browser.new_context(storage_state=str(auth_file))
+        page = context.new_page()
+
+        print("\n>>> 阶段1：扫描列表页，收集帖子链接...")
+        for page_number in range(1, pages + 1):
+            list_url = replace_page_number(start_url, page_number)
+            print(f"[列表 {page_number}/{pages}] {list_url}")
+            page.goto(list_url, wait_until="networkidle", timeout=timeout)
+
+            # 省份筛选（仅第一页）
+            if region_name and page_number == 1:
+                if select_region_on_page(page, region_name, timeout):
+                    print(f"  ✔ 已筛选省份: {region_name}")
+                else:
+                    print(f"  ⚠ 省份筛选失败，继续...")
+
+            # 城市筛选（仅第一页，且省份筛选成功后）
+            if city_name and page_number == 1:
+                if select_city_on_page(page, city_name, timeout):
+                    print(f"  ✔ 已筛选城市: {city_name}")
+                else:
+                    print(f"  ⚠ 城市筛选失败，继续...")
+
+            page.wait_for_timeout(1500)
+            found = extract_thread_urls(page, list_url)
+            new_count = 0
+            for url in found:
+                if url not in seen:
+                    seen.add(url)
+                    all_urls.append(url)
+                    new_count += 1
+            print(f"  → 发现 {len(found)} 条，新增 {new_count} 条，累计 {len(all_urls)} 条")
+
+            if max_threads and len(all_urls) >= max_threads:
+                all_urls = all_urls[:max_threads]
+                print(f"  → 已达上限 {max_threads} 条，停止翻页")
+                break
+
+            if delay and page_number < pages:
+                time.sleep(delay)
+
+        if not all_urls:
+            browser.close()
+            print("\n未发现任何帖子链接，请检查配置或网站状态。")
+            return
+
+        # 保存URL列表
+        output_dir.mkdir(parents=True, exist_ok=True)
+        discovered_file = output_dir / "discovered_urls.txt"
+        discovered_file.write_text("\n".join(all_urls), encoding="utf-8")
+        print(f"\n  共发现 {len(all_urls)} 条帖子链接 → {discovered_file.name}")
+
+        # ---- 阶段2：逐个抓取详情并解析 ----
+        print(f"\n>>> 阶段2：抓取详情并解析结构化数据...")
+        summary_rows = []
+        detail_rows = []
+        for index, url in enumerate(all_urls, start=1):
+            print(f"[{index}/{len(all_urls)}] {url}")
+            result = collect_page(page, url, timeout)
+
+            detail_item = None
+            if not result["permission_blocked"]:
+                detail_item = parse_detail_result(result, config_path)
+                if detail_item:
+                    detail_rows.append(detail_item.to_dict(include_raw=False))
+                    print(f"  ✔ age={detail_item.age}, price={detail_item.price_range}, "
+                          f"addr={detail_item.address[:25] if detail_item.address else 'N/A'}")
+
+            row = write_result(result, output_dir, detail_item)
+            summary_rows.append(row)
+
+            if row["permission_blocked"]:
+                print("  ⚠ 页面可能需登录或积分不足")
+
+            if delay and index < len(all_urls):
+                time.sleep(delay)
+
+        browser.close()
+
+    # ---- 阶段3：输出结果 ----
+    _write_summary_csv(output_dir, summary_rows, "summary.csv")
+    if detail_rows:
+        _write_detail_csv(output_dir, detail_rows, "detail_data.csv")
+        _write_detail_json(output_dir, detail_rows, "detail_data.json")
+    _print_summary(summary_rows, detail_rows)
+
+
+# ---------------------------------------------------------------------------
 # 显示配置信息
 # ---------------------------------------------------------------------------
 
@@ -602,6 +762,15 @@ def show_config(args: argparse.Namespace) -> None:
     print("=" * 50)
     print("寻欢阁爬虫 - 全局配置信息")
     print(f"Base URL: {config.get('base_url', 'N/A')}")
+    print()
+
+    target = config.get("target", {})
+    print("--- 当前采集目标 ---")
+    print(f"  省份: {target.get('region', '(不限)')}")
+    print(f"  城市: {target.get('city', '(不限)')}")
+    print(f"  板块: {target.get('forum', '最新信息')}")
+    print(f"  翻页: {target.get('pages', 1)} 页")
+    print(f"  上限: {target.get('max_threads', 0) or '不限制'} 条")
     print()
 
     print("--- 论坛板块 ---")
@@ -672,10 +841,26 @@ def build_parser() -> argparse.ArgumentParser:
     crawl.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
                        help="全局配置文件路径（默认: config.yaml）")
     crawl.add_argument("--region", default=None,
-                       help="按省份筛选（如：'北京市'、'广东省'，需与config.yaml一致）")
+                       help="按省份筛选（如：'北京市'、'广东省'）")
+    crawl.add_argument("--city", default=None,
+                       help="按城市筛选（如：'深圳市'、'广州市'，需配合--region使用）")
     crawl.add_argument("--forum", default=None,
                        help="选择论坛板块（如：'最新信息'、'自荐认证'、'包养专区'）")
     crawl.set_defaults(func=crawl_and_fetch)
+
+    # ---- run 子命令（★ 一键运行） ----
+    run_cmd = subparsers.add_parser("run", help="从config.yaml读取target配置，一键完成采集全流程")
+    run_cmd.add_argument("--auth", default=str(AUTH_FILE))
+    run_cmd.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
+                         help="全局配置文件路径（默认: config.yaml）")
+    run_cmd.add_argument("--output", default="",
+                         help="输出目录（默认使用config中的output_dir）")
+    run_cmd.add_argument("--delay", type=float, default=None,
+                         help="请求间隔秒数（默认使用config中的delay）")
+    run_cmd.add_argument("--timeout", type=int, default=None,
+                         help="超时毫秒数（默认使用config中的timeout）")
+    run_cmd.add_argument("--headless", action="store_true", help="无头模式运行浏览器")
+    run_cmd.set_defaults(func=run_from_config)
 
     # ---- config 子命令 ----
     config_cmd = subparsers.add_parser("config", help="显示全局配置信息")
