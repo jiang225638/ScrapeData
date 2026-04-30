@@ -1,0 +1,197 @@
+# ============================================================================
+# 寻欢阁爬虫 全局环境配置文件
+# 功能：定义可选的地区、论坛板块、采集参数等全局配置
+# ============================================================================
+
+# ============================================================================
+# ★ 目标任务配置（修改此处即可，然后运行: python xhg_scraper.py run）
+# ============================================================================
+target:
+  # 要抓取的省份名称（从下方 regions 列表中选一个，如 "广东省"、"北京市"）
+  region: ""
+  # 要抓取的论坛板块（"最新信息"、"自荐认证"、"包养专区"）
+  forum: "最新信息"
+  # 列表页翻页数量（每页约20条）
+  pages: 1
+  # 最多抓取多少条详情（0=不限制）
+  max_threads: 0
+
+# 网站基础URL
+base_url: "https://xhg20260430.xhg303.one/"
+
+# --------------------------------------------------------------------------
+# 论坛板块定义（fid 对应论坛版块ID）
+# --------------------------------------------------------------------------
+forums:
+  最新信息:
+    fid: 2
+    list_url: "forum.php?mod=forumdisplay&fid=2"
+    description: "最新发布的信息列表"
+  自荐认证:
+    fid: 47
+    list_url: "forum.php?mod=forumdisplay&fid=47"
+    description: "用户自荐认证信息"
+  包养专区:
+    fid: 40
+    list_url: "forum.php?mod=forumdisplay&fid=40"
+    description: "包养相关专区"
+
+# --------------------------------------------------------------------------
+# 省份/地区列表（对应首页省份筛选，用于选择抓取特定地区数据）
+# name: 显示名称  code: 省份代码（用于筛选或标记）
+# --------------------------------------------------------------------------
+regions:
+  - name: "不限"
+    code: ""
+    short: "all"
+  - name: "北京市"
+    code: "beijing"
+    short: "bj"
+  - name: "上海市"
+    code: "shanghai"
+    short: "sh"
+  - name: "天津市"
+    code: "tianjin"
+    short: "tj"
+  - name: "重庆市"
+    code: "chongqing"
+    short: "cq"
+  - name: "广东省"
+    code: "guangdong"
+    short: "gd"
+  - name: "江苏省"
+    code: "jiangsu"
+    short: "js"
+  - name: "山东省"
+    code: "shandong"
+    short: "sd"
+  - name: "浙江省"
+    code: "zhejiang"
+    short: "zj"
+  - name: "四川省"
+    code: "sichuan"
+    short: "sc"
+  - name: "河南省"
+    code: "henan"
+    short: "hn"
+  - name: "福建省"
+    code: "fujian"
+    short: "fj"
+  - name: "安徽省"
+    code: "anhui"
+    short: "ah"
+  - name: "湖北省"
+    code: "hubei"
+    short: "hb"
+  - name: "陕西省"
+    code: "shaanxi"
+    short: "sx"
+  - name: "山西省"
+    code: "shanxi"
+    short: "sa"
+  - name: "湖南省"
+    code: "hunan"
+    short: "hu"
+  - name: "江西省"
+    code: "jiangxi"
+    short: "jx"
+  - name: "广西"
+    code: "guangxi"
+    short: "gx"
+  - name: "贵州省"
+    code: "guizhou"
+    short: "gz"
+  - name: "云南省"
+    code: "yunnan"
+    short: "yn"
+  - name: "河北省"
+    code: "hebei"
+    short: "he"
+  - name: "辽宁省"
+    code: "liaoning"
+    short: "ln"
+  - name: "吉林省"
+    code: "jilin"
+    short: "jl"
+  - name: "黑龙江省"
+    code: "heilongjiang"
+    short: "hl"
+  - name: "甘肃省"
+    code: "gansu"
+    short: "gs"
+  - name: "新疆"
+    code: "xinjiang"
+    short: "xj"
+  - name: "宁夏"
+    code: "ningxia"
+    short: "nx"
+  - name: "内蒙古"
+    code: "neimenggu"
+    short: "nm"
+  - name: "西藏"
+    code: "xizang"
+    short: "xz"
+  - name: "海南省"
+    code: "hainan"
+    short: "hi"
+  - name: "青海省"
+    code: "qinghai"
+    short: "qh"
+  - name: "香港"
+    code: "hongkong"
+    short: "hk"
+  - name: "台湾"
+    code: "taiwan"
+    short: "tw"
+  - name: "澳门"
+    code: "macau"
+    short: "mo"
+
+# --------------------------------------------------------------------------
+# 详情页提取字段定义
+# --------------------------------------------------------------------------
+detail_fields:
+  - name: "小姐年龄"
+    key: "age"
+    pattern: "小姐年龄[：:]\\s*(\\d+)"
+  - name: "小姐颜值"
+    key: "beauty_score"
+    pattern: "小姐颜值[：:]\\s*(\\d+)分"
+  - name: "消费水平"
+    key: "price_range"
+    pattern: "消费水平[：:]\\s*([\\d,-]+)"
+  - name: "服务项目"
+    key: "services"
+    pattern: "服务项目[：:]\\s*(.+?)(?:联系方式|\\n\\n|\\Z)"
+  - name: "所属地区"
+    key: "region"
+    pattern: "([^\\s\\u00bb]+)\\s*\\u00bb\\s*([^\\s]+)"
+  - name: "与你号"
+    key: "yuni_id"
+    pattern: "与你号[：:]\\s*([a-zA-Z0-9_-]+)"
+  - name: "电报号"
+    key: "telegram"
+    pattern: "电报号[：:]\\s*(@?[a-zA-Z0-9_-]+)"
+  - name: "QQ"
+    key: "qq"
+    pattern: "(?<!电报)QQ[：:]\\s*(\\d+)"
+  - name: "微信"
+    key: "wechat"
+    pattern: "微信[：:]\\s*([a-zA-Z0-9_-]+)"
+  - name: "电话号码"
+    key: "phone"
+    pattern: "(?:电话号码|手机|电话)[：:]\\s*(\\d[\\d\\s-]{6,})"
+  - name: "详细地址"
+    key: "address"
+    pattern: "详细地址[：:]\\s*(.+?)(?:\\n|$)"
+
+# --------------------------------------------------------------------------
+# 采集参数默认值
+# --------------------------------------------------------------------------
+crawl:
+  output_dir: "output"
+  delay: 1.5
+  timeout: 60000
+  max_threads: 0
+  pages: 1
+  use_headless: true

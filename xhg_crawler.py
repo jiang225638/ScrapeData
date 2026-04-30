@@ -95,6 +95,18 @@ TIME_PATTERNS = [
     re.compile(r"昨天\s*(\d{1,2}:\d{2})"),
 ]
 
+COMPACT_TIME_PATTERN = re.compile(
+    r"(?P<time>\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}|"
+    r"\d{4}-\d{1,2}-\d{1,2}|"
+    r"\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}|"
+    r"\d+\s*(?:秒|分钟|小时)前|"
+    r"半\s*(?:分钟|小时)前|"
+    r"昨天\s*\d{1,2}:\d{2}|"
+    r"前天\s*\d{1,2}:\d{2})"
+)
+
+TRAILING_CITY_PATTERN = re.compile(r"\s*[\u4e00-\u9fff]{2,8}[市县区]\s*$")
+
 # 摘要提取的"阅读全文"风格截断
 SUMMARY_MAX_LEN = 200
 
@@ -214,7 +226,7 @@ class RetryableSession:
             "User-Agent": random.choice(USER_AGENTS),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Encoding": "gzip, deflate",
             "Connection": "keep-alive",
             "Cache-Control": "max-age=0",
         }
@@ -365,16 +377,41 @@ class DataExtractor:
             if absolute_link in seen_links:
                 continue
             seen_links.add(absolute_link)
-            title = a_tag.get_text(strip=True) or ""
+            raw_text = a_tag.get_text(" ", strip=True) or ""
+            title, publish_time, view_count, summary = self._parse_compact_link_text(raw_text)
             items.append(ListItem(
                 title=title,
                 link=absolute_link,
+                publish_time=publish_time,
+                summary=summary,
                 thread_id=thread_id,
+                view_count=view_count,
                 category=category,
                 source_page=source_url,
                 crawl_time=datetime.now().isoformat(),
             ))
         return items
+
+    @staticmethod
+    def _parse_compact_link_text(text: str) -> tuple[str, str, str, str]:
+        """解析移动版列表中包在同一个链接内的标题、时间、浏览数和摘要。"""
+        normalized = re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
+        match = COMPACT_TIME_PATTERN.search(normalized)
+        if not match:
+            return normalized, "", "", ""
+
+        title = normalized[:match.start()].strip()
+        publish_time = match.group("time").strip()
+        remainder = normalized[match.end():].strip()
+
+        view_count = ""
+        view_match = re.match(r"(\d+)\s*(.*)", remainder, re.S)
+        if view_match:
+            view_count = view_match.group(1)
+            remainder = view_match.group(2).strip()
+
+        summary = TRAILING_CITY_PATTERN.sub("", remainder).strip()
+        return title, publish_time, view_count, summary[:SUMMARY_MAX_LEN]
 
     @staticmethod
     def _extract_tid(href: str) -> str:
@@ -675,7 +712,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 DEFAULT_LIST_PAGE = (
     "https://xhg20260430.xhg303.one/forum.php?"
-    "mod=forumdisplay&fid=2&filter=sortid&sortid=3&searchsort=1&area=6.1"
+    "mod=forumdisplay&fid=2"
 )
 
 
@@ -684,10 +721,7 @@ def _default_list_urls(base_url: str) -> list[str]:
     parsed = urlparse(base_url)
     base = f"{parsed.scheme}://{parsed.netloc}/"
     return [
-        f"{base}forum.php?mod=forumdisplay&fid=2&filter=sortid&sortid=3&searchsort=1&area=6.1",
-        f"{base}forum.php?mod=forumdisplay&fid=47",
-        f"{base}forum.php?mod=forumdisplay&fid=40",
-        f"{base}portal.php",
+        f"{base}forum.php?mod=forumdisplay&fid=2",
     ]
 
 

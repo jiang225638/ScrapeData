@@ -2,7 +2,8 @@
 pytest 共享夹具（fixtures）
 """
 import json
-import tempfile
+import shutil
+import uuid
 from pathlib import Path
 
 import pytest
@@ -149,8 +150,8 @@ def sample_portal_html() -> str:
 @pytest.fixture
 def temp_output_dir():
     """创建临时输出目录，测试结束后自动清理"""
-    tmpdir_obj = tempfile.TemporaryDirectory(prefix="xhg_test_")
-    tmpdir = Path(tmpdir_obj.name)
+    tmpdir = Path.cwd() / ".tmp" / f"xhg_test_{uuid.uuid4().hex}"
+    tmpdir.mkdir(parents=True, exist_ok=True)
     try:
         yield tmpdir
     finally:
@@ -161,7 +162,7 @@ def temp_output_dir():
             handler.close()
             logger.removeHandler(handler)
         try:
-            tmpdir_obj.cleanup()
+            shutil.rmtree(tmpdir)
         except (PermissionError, NotADirectoryError, OSError):
             pass
 

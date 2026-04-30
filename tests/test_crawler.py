@@ -614,12 +614,9 @@ class TestHelpers:
     def test_default_list_urls(self):
         """测试默认列表URL生成"""
         urls = _default_list_urls(DEFAULT_BASE_URL)
-        assert len(urls) == 4
-        assert any("fid=2" in url for url in urls)
-        assert any("filter=sortid" in url for url in urls)
-        assert any("fid=47" in url for url in urls)
-        assert any("fid=40" in url for url in urls)
-        assert any("portal.php" in url for url in urls)
+        assert urls == [
+            "https://xhg20260430.xhg303.one/forum.php?mod=forumdisplay&fid=2",
+        ]
 
     def test_default_list_urls_all_absolute(self):
         """测试默认URL都是绝对路径"""

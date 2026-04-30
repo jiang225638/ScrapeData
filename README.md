@@ -39,11 +39,11 @@ playwright install chromium
 ### 快速开始
 
 ```powershell
-# 爬取默认的列表页（带筛选条件的最新信息页面）
+# 爬取默认的列表页
 python xhg_crawler.py
 
 # 指定要爬取的列表页URL
-python xhg_crawler.py --urls "https://xhg20260430.xhg303.one/forum.php?mod=forumdisplay&fid=2&filter=sortid&sortid=3&searchsort=1&area=6.1"
+python xhg_crawler.py --urls "https://xhg20260430.xhg303.one/forum.php?mod=forumdisplay&fid=2"
 
 # 从文件读取URL列表
 python xhg_crawler.py --urls-file urls.txt
