@@ -353,7 +353,7 @@ def write_result(result: dict, output_dir: Path, detail_item: Optional[DetailIte
     if detail_item:
         detail_dict = detail_item.to_dict(include_raw=False)
         for key in ("age", "beauty_score", "price_range", "services",
-                     "qq", "wechat", "phone", "address",
+                     "qq", "wechat", "qq_wechat", "phone", "address",
                      "region_province", "region_city"):
             row[f"detail_{key}"] = detail_dict.get(key, "")
     return row
@@ -494,11 +494,15 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
     city_name = getattr(args, "city", None)
 
     start_url = args.start_url or root_url
+    pages = 1
+    curpage = 0
+    max_threads = 0
 
     config = None
     if config_path and config_path.exists():
         config = load_config(str(config_path))
         root_url = config.get("base_url", DEFAULT_START_URL)
+        target = config.get("target", {})
         # 根据配置确定起始URL
         if args.forum and args.forum in config.get("forums", {}):
             forum_config = config["forums"][args.forum]
@@ -518,6 +522,14 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
         elif city_name:
             print(f"  ⚠ 城市 '{city_name}' 未在 config.yaml 的 cities 表中找到 area 代码")
 
+        # 从 config 读取翻页参数（CLI 默认值不覆盖 config）
+        pages = int(target.get("pages", 1)) if target.get("pages") is not None else args.pages
+        curpage = int(target.get("curpage", 0))
+        max_threads = int(target.get("max_threads", 0)) if target.get("max_threads") is not None else args.max_threads
+    else:
+        pages = args.pages
+        max_threads = args.max_threads
+
     output_base = Path(args.output)
     all_urls: list[str] = []
     seen = set()
@@ -531,15 +543,43 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
         context = browser.new_context(storage_state=str(auth_file))
         page = context.new_page()
 
-        # 翻页获取列表页链接
-        for page_number in range(1, args.pages + 1):
-            list_url = replace_page_number(start_url, page_number)
-            print(f"[list {page_number}/{args.pages}] Opening: {list_url}")
-            page.goto(list_url, wait_until="networkidle", timeout=args.timeout)
+        page_list = _build_page_list(curpage, pages)
 
-            page.wait_for_timeout(1500)
+        # 先访问第一个目标页，检测最大页码
+        first_list_url = replace_page_number(start_url, page_list[0])
+        print(f"[list {page_list[0]}] 首访: {first_list_url}")
+        _safe_goto(page, first_list_url, args.timeout)
+        page.wait_for_timeout(1500)
+        max_page = _detect_max_page(page)
+        if max_page > 0:
+            print(f"  → 检测到最大页码: {max_page} 页")
+
+        if curpage > 0 and max_page > 0 and curpage > max_page:
+            print(f"  ⚠ 指定页码 {curpage} 超出最大页码 {max_page}，无数据可抓取。")
+            browser.close()
+            return
+
+        # 翻页获取列表页链接
+        for page_number in page_list:
+            list_url = replace_page_number(start_url, page_number)
+            total_pages_hint = f"/{pages}" if curpage == 0 else ""
+            print(f"[list {page_number}{total_pages_hint}] Opening: {list_url}")
+
+            if page_number != page_list[0]:
+                _safe_goto(page, list_url, args.timeout)
+                page.wait_for_timeout(1500)
+
             found = extract_thread_urls(page, list_url)
             print(f"  Found {len(found)} thread links on this page.")
+
+            if curpage > 0 and not found:
+                page_list_alt = page.locator("a[href*='page=']").evaluate_all(
+                    "(links) => links.map(l => l.textContent.trim()).filter(t => /^\\d+$/.test(t)).map(Number)"
+                )
+                actual_max = max(page_list_alt) if page_list_alt else max_page
+                print(f"  ⚠ 第 {page_number} 页无数据，最大页码约为 {actual_max or '?'}")
+                browser.close()
+                return
 
             new_count = 0
             for url in found:
@@ -549,11 +589,11 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
                     new_count += 1
             print(f"  Added {new_count} new links. Total: {len(all_urls)}")
 
-            if args.max_threads and len(all_urls) >= args.max_threads:
-                all_urls = all_urls[: args.max_threads]
+            if max_threads and len(all_urls) >= max_threads:
+                all_urls = all_urls[:max_threads]
                 break
 
-            if args.delay and page_number < args.pages:
+            if args.delay and page_number != page_list[-1]:
                 time.sleep(args.delay)
 
         if not all_urls:
@@ -597,8 +637,9 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
         "region": region_name or "(不限)",
         "city": city_name or "(不限)",
         "forum": args.forum or "最新信息",
-        "pages": args.pages,
-        "max_threads": args.max_threads,
+        "pages": pages,
+        "curpage": curpage,
+        "max_threads": max_threads,
         "discovered_urls": len(all_urls),
         "started": run_started.isoformat(),
         "ended": run_ended.isoformat(),
@@ -610,6 +651,71 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 # 输出辅助函数
 # ---------------------------------------------------------------------------
+
+def _safe_goto(page, url: str, timeout: int) -> None:
+    """
+    安全导航到指定URL，networkidle 超时则回退到 domcontentloaded
+    """
+    try:
+        page.goto(url, wait_until="networkidle", timeout=timeout)
+    except PlaywrightTimeoutError:
+        page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+
+
+def _detect_max_page(page) -> int:
+    """
+    从列表页HTML中检测最大页码
+
+    Args:
+        page: Playwright page对象
+
+    Returns:
+        int: 最大页码，无法检测则返回0
+    """
+    try:
+        page_links = page.locator("a[href*='page=']").evaluate_all(
+            "(links) => links.map(l => l.textContent.trim()).filter(t => /^\\d+$/.test(t)).map(Number)"
+        )
+        if page_links:
+            return max(page_links)
+    except Exception:
+        pass
+
+    try:
+        html = page.content()
+        match = re.search(r"共\s*(\d+)\s*页", html)
+        if match:
+            return int(match.group(1))
+    except Exception:
+        pass
+
+    try:
+        last_links = page.locator("a.last[href*='page=']").evaluate_all(
+            "(links) => links.map(l => { const m = l.href.match(/page=(\\d+)/); return m ? Number(m[1]) : 0; })"
+        )
+        if last_links:
+            for v in last_links:
+                if v:
+                    return v
+    except Exception:
+        pass
+    return 0
+
+
+def _build_page_list(curpage: int, pages: int) -> list[int]:
+    """
+    根据 curpage / pages 配置生成要抓取的页码列表
+
+    Args:
+        curpage: 指定单页页码（>0 时生效）
+        pages: 翻页总数（curpage=0 时生效）
+
+    Returns:
+        list[int]: 页码列表
+    """
+    if curpage > 0:
+        return [curpage]
+    return list(range(1, pages + 1))
 
 def _make_run_dir(output_base: Path, prefix: str = "") -> Path:
     """
@@ -721,6 +827,7 @@ def run_from_config(args: argparse.Namespace) -> None:
     city_name = target.get("city", "").strip()
     forum_name = target.get("forum", "").strip()
     pages = int(target.get("pages", 1))
+    curpage = int(target.get("curpage", 0))
     max_threads = int(target.get("max_threads", 0))
     # 从 crawl 节读取其他参数
     crawl_config = config.get("crawl", {})
@@ -762,7 +869,10 @@ def run_from_config(args: argparse.Namespace) -> None:
     print("  寻欢阁爬虫 - 自动采集模式")
     print(f"  地区: {location_str}")
     print(f"  板块: {forum_name}")
-    print(f"  翻页: {pages} 页")
+    if curpage > 0:
+        print(f"  指定页: 第 {curpage} 页")
+    else:
+        print(f"  翻页: {pages} 页")
     print(f"  上限: {'不限制' if max_threads == 0 else str(max_threads) + ' 条'}")
     print("=" * 55)
 
@@ -777,13 +887,43 @@ def run_from_config(args: argparse.Namespace) -> None:
         page = context.new_page()
 
         print("\n>>> 阶段1：扫描列表页，收集帖子链接...")
-        for page_number in range(1, pages + 1):
-            list_url = replace_page_number(start_url, page_number)
-            print(f"[列表 {page_number}/{pages}] {list_url}")
-            page.goto(list_url, wait_until="networkidle", timeout=timeout)
+        page_list = _build_page_list(curpage, pages)
 
-            page.wait_for_timeout(1500)
+        # 先访问第一个目标页，检测最大页码
+        first_list_url = replace_page_number(start_url, page_list[0])
+        print(f"[列表 {page_list[0]}] 首访: {first_list_url}")
+        _safe_goto(page, first_list_url, timeout)
+        page.wait_for_timeout(1500)
+        max_page = _detect_max_page(page)
+        if max_page > 0:
+            print(f"  → 检测到最大页码: {max_page} 页")
+
+        # 如果 curpage 超出最大页码，提前终止
+        if curpage > 0 and max_page > 0 and curpage > max_page:
+            print(f"  ⚠ 指定页码 {curpage} 超出最大页码 {max_page}，无数据可抓取。")
+            browser.close()
+            return
+
+        for page_number in page_list:
+            list_url = replace_page_number(start_url, page_number)
+            total_pages_hint = f"/{pages}" if curpage == 0 else ""
+            print(f"[列表 {page_number}{total_pages_hint}] {list_url}")
+
+            if page_number != page_list[0]:
+                _safe_goto(page, list_url, timeout)
+                page.wait_for_timeout(1500)
+
             found = extract_thread_urls(page, list_url)
+
+            if curpage > 0 and not found:
+                page_list_alt = page.locator("a[href*='page=']").evaluate_all(
+                    "(links) => links.map(l => l.textContent.trim()).filter(t => /^\\d+$/.test(t)).map(Number)"
+                )
+                actual_max = max(page_list_alt) if page_list_alt else max_page
+                print(f"  ⚠ 第 {page_number} 页无数据，最大页码约为 {actual_max or '?'}")
+                browser.close()
+                return
+
             new_count = 0
             for url in found:
                 if url not in seen:
@@ -797,7 +937,7 @@ def run_from_config(args: argparse.Namespace) -> None:
                 print(f"  → 已达上限 {max_threads} 条，停止翻页")
                 break
 
-            if delay and page_number < pages:
+            if delay and page_number != page_list[-1]:
                 time.sleep(delay)
 
         if not all_urls:
@@ -841,6 +981,7 @@ def run_from_config(args: argparse.Namespace) -> None:
         "city": city_name or "(不限)",
         "forum": forum_name,
         "pages": pages,
+        "curpage": curpage,
         "max_threads": max_threads,
         "discovered_urls": len(all_urls),
         "started": run_started.isoformat(),
@@ -874,8 +1015,14 @@ def show_config(args: argparse.Namespace) -> None:
     print(f"  省份: {target.get('region', '(不限)')}")
     print(f"  城市: {target.get('city', '(不限)')}")
     print(f"  板块: {target.get('forum', '最新信息')}")
-    print(f"  翻页: {target.get('pages', 1)} 页")
-    print(f"  上限: {target.get('max_threads', 0) or '不限制'} 条")
+    curpage = int(target.get("curpage", 0))
+    pages = int(target.get("pages", 1))
+    if curpage > 0:
+        print(f"  指定页: 第 {curpage} 页")
+    else:
+        print(f"  翻页: {pages} 页")
+    max_threads = int(target.get("max_threads", 0))
+    print(f"  上限: {'不限制' if max_threads == 0 else str(max_threads) + ' 条'}")
     print()
 
     print("--- 论坛板块 ---")

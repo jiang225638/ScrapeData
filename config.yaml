@@ -14,10 +14,13 @@ target:
   region: "江苏省"
   # 论坛板块: "最新信息" / "自荐认证" / "包养专区"
   forum: "最新信息"
-  # 列表页翻页数（每页约20条）
-  pages: 1
-  # 最多抓取多少条（0=不限制）
-  max_threads: 10
+  # ★ 翻页方式（二选一）：
+  #   pages=N    → 抓取前 N 页（curpage 必须为 0）
+  #   curpage=N  → 只抓取第 N 页（pages 必须为 0）
+  pages: 2
+  curpage: 0
+  # 最多抓取多少条（0=不限制，到达上限后自动停止翻页）
+  max_threads: 0
 
 # 网站基础URL
 base_url: "https://xhg20260430.xhg303.one/"
@@ -137,16 +140,19 @@ detail_fields:
     pattern: "服务项目[：:]\\s*(.+?)(?:联系方式|\\n\\n|\\Z)"
   - name: "与你号"
     key: "yuni_id"
-    pattern: "与你号[：:]\\s*([a-zA-Z0-9_-]+)"
+    pattern: "与你号[：:]\\s*([a-zA-Z0-9_-]+(?:\\s*[或、,，]\\s*[a-zA-Z0-9_-]+)*)"
   - name: "电报号"
     key: "telegram"
     pattern: "电报号[：:]\\s*(@?[a-zA-Z0-9_-]+)"
   - name: "QQ"
     key: "qq"
-    pattern: "(?:QQ[：:]|[Qq]{2}号[：:])\\s*(\\d+)"
+    pattern: "(?i)(?:qq)(?:号)?(?:/微信)?[：:]\\s*(\\d+(?:\\s*[或、,，]\\s*\\d+)*)|(?<!\\w)qq(\\d{5,})"
   - name: "微信"
     key: "wechat"
-    pattern: "微信[：:]\\s*([a-zA-Z0-9_-]+)"
+    pattern: "(?:QQ/)?微信[：:]\\s*(\\S+(?:\\s*[或、,，]\\s*\\S+)*)"
+  - name: "QQ/微信原文"
+    key: "qq_wechat"
+    pattern: "QQ/微信[：:]\\s*(.+?)(?:\\n\\s*(?:联系方式|电话|手机|与你|电报|QQ号|微信|详细地址|详情介绍|我要举报|我要收藏|$\\s*$))"
   - name: "电话号码"
     key: "phone"
     pattern: "(?:电话号码|手机|电话)[：:]\\s*(\\d[\\d\\s-]{6,})"

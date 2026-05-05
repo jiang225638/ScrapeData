@@ -23,10 +23,15 @@ DEFAULT_PATTERNS = [
     ("beauty_score", re.compile(r"小姐颜值[：:]\s*(\d+)", re.MULTILINE)),
     ("price_range", re.compile(r"消费水平[：:]\s*([\d,-]+)", re.MULTILINE)),
     ("services", re.compile(r"服务项目[：:]\s*(.+?)(?:\n\s*(?:联系方式|电话|手机|微信|QQ|详细地址|详情介绍|我要举报|我要收藏))", re.MULTILINE | re.DOTALL)),
-    ("yuni_id", re.compile(r"与你号[：:]\s*([a-zA-Z0-9_-]+)", re.MULTILINE)),
+    ("yuni_id", re.compile(r"与你号[：:]\s*([a-zA-Z0-9_-]+(?:\s*[或、,，]\s*[a-zA-Z0-9_-]+)*)", re.MULTILINE)),
     ("telegram", re.compile(r"电报号[：:]\s*(@?[a-zA-Z0-9_-]+)", re.MULTILINE)),
-    ("qq", re.compile(r"(?:QQ[：:]|qq号[：:]|[Qq][Qq]号[：:])\s*(\d+)", re.MULTILINE | re.IGNORECASE)),
-    ("wechat", re.compile(r"微信[：:]\s*([a-zA-Z0-9_-]+)", re.MULTILINE)),
+    ("qq", re.compile(
+        r"(?:qq)(?:号)?(?:/微信)?[：:]\s*(\d+(?:\s*[或、,，]\s*\d+)*)"
+        r"|(?<!\w)qq(\d{5,})",
+        re.MULTILINE | re.IGNORECASE
+    )),
+    ("wechat", re.compile(r"(?:QQ/)?微信[：:]\s*(\S+(?:\s*[或、,，]\s*\S+)*)", re.MULTILINE)),
+    ("qq_wechat", re.compile(r"QQ/微信[：:]\s*(.+?)(?:\n\s*(?:联系方式|电话|手机|与你|电报|QQ号|微信|详细地址|详情介绍|我要举报|我要收藏|$\s*$))", re.MULTILINE | re.DOTALL)),
     ("phone", re.compile(r"(?:电话号码|手机|电话)[：:]\s*(\d[\d\s-]{6,})", re.MULTILINE)),
     ("address", re.compile(r"详细地址[：:]\s*(.+?)(?:\n|$)", re.MULTILINE)),
 ]
@@ -63,6 +68,7 @@ class DetailItem:
     telegram: str = ""
     qq: str = ""
     wechat: str = ""
+    qq_wechat: str = ""
     phone: str = ""
     address: str = ""
 
@@ -80,7 +86,7 @@ class DetailItem:
             "publish_date", "view_count", "author",
             "region_province", "region_city",
             "age", "beauty_score", "price_range", "services",
-            "yuni_id", "telegram", "qq", "wechat", "phone", "address",
+            "yuni_id", "telegram", "qq", "wechat", "qq_wechat", "phone", "address",
             "raw_text",
         ]
 
@@ -200,9 +206,13 @@ class DetailParser:
 
     @staticmethod
     def _match_first(pattern: re.Pattern, text: str) -> str:
-        """匹配第一个结果并返回捕获组"""
+        """匹配第一个结果并返回第一个非空捕获组"""
         match = pattern.search(text)
-        return match.group(1).strip() if match else ""
+        if match:
+            for g in match.groups():
+                if g is not None:
+                    return g.strip()
+        return ""
 
     @staticmethod
     def _extract_publish_date(text: str) -> str:
@@ -245,23 +255,32 @@ class DetailParser:
 
     def _post_process(self, item: DetailItem) -> None:
         """后处理：清洗和标准化提取的数据"""
-        # 清洗服务项目文本（去除标签和多余空格）
         if item.services:
             item.services = re.sub(r"\s+", "，", item.services).strip("，。.；;")
             item.services = re.sub(r"[,，]\s*(?:我要举报|我要收藏|举报|收藏)\s*", "", item.services)
             item.services = item.services.strip("，。.；;")
 
-        # 清洗手机号码（去除空格和横线）
         if item.phone:
             item.phone = re.sub(r"[\s-]", "", item.phone)
 
-        # 确保年龄是纯数字
         if item.age:
             item.age = re.sub(r"[^\d]", "", item.age)
 
-        # 确保消费水平格式正确
         if item.price_range:
             item.price_range = re.sub(r"[^\d,-]", "", item.price_range)
+
+        if item.qq:
+            item.qq = re.sub(r"\s*[或、,，]\s*", "、", item.qq)
+
+        if item.wechat:
+            item.wechat = re.sub(r"\s*[或、,，]\s*", "、", item.wechat)
+            item.wechat = re.sub(r"^qq(\d{5,})$", r"\1", item.wechat)
+
+        if item.yuni_id:
+            item.yuni_id = re.sub(r"\s*[或、,，]\s*", "、", item.yuni_id)
+
+        if item.qq_wechat:
+            item.qq_wechat = item.qq_wechat.strip().rstrip("\n ")
 
 
 def load_config(config_path: Optional[str] = None) -> dict:
