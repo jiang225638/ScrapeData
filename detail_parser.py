@@ -345,3 +345,45 @@ def get_region_by_name(config: dict, name: str) -> Optional[dict]:
         if region.get("name") == name or region.get("code") == name:
             return region
     return None
+
+
+def get_area_code(config: dict, region_name: str = "", city_name: str = "") -> str:
+    """
+    根据 regions 列表顺序和 cities 表自动计算 area 参数值
+
+    规则：
+      - regions 列表中"不限"索引为0（跳过），北京市索引=1 → area=1，上海市=2，依此类推
+      - 若指定 city_name，则 area = region_index + "." + cities[city_name]
+        例如 江苏省索引=6，南京市后缀="1" → area=6.1
+
+    Args:
+        config: 配置字典
+        region_name: 省份/地区名称，如"北京市"、"江苏省"
+        city_name: 城市名称，如"南京市"
+
+    Returns:
+        str: area 参数值，如 "6"、"6.1"，无匹配返回 ""
+    """
+    if not region_name and not city_name:
+        return ""
+
+    regions = config.get("regions", [])
+    cities = config.get("cities", {})
+
+    region_idx = 0
+    for i, r in enumerate(regions):
+        if r.get("name") == region_name:
+            region_idx = i
+            break
+
+    if region_idx <= 0:
+        return ""
+
+    area = str(region_idx)
+
+    if city_name and city_name in cities:
+        city_suffix = str(cities[city_name]).strip()
+        if city_suffix:
+            area = f"{area}.{city_suffix}"
+
+    return area

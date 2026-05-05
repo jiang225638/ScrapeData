@@ -23,7 +23,7 @@ import yaml
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
-from detail_parser import DetailItem, DetailParser, load_config
+from detail_parser import DetailItem, DetailParser, get_area_code, load_config
 
 # ---------------------------------------------------------------------------
 # 默认常量
@@ -510,17 +510,25 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
             if list_url:
                 start_url = urljoin(root_url, list_url)
 
-        # 如果指定了城市且有 area 代码，直接构造地区筛选 URL
-        cities = config.get("cities", {})
-        if city_name and city_name in cities:
-            area_code = cities[city_name]
+        # 根据 regions 列表顺序自动计算 area 参数
+        # CLI 参数优先，否则从 config 读取 region
+        region_name = region_name or target.get("region", "").strip() or None
+        city_name = city_name or target.get("city", "").strip() or None
+
+        area_code = get_area_code(config, region_name, city_name)
+        if area_code:
             if "?" in start_url:
                 start_url = start_url + f"&filter=sortid&sortid=3&searchsort=1&area={area_code}"
             else:
                 start_url = start_url + f"?filter=sortid&sortid=3&searchsort=1&area={area_code}"
-            print(f"  ✔ 城市 {city_name} → area={area_code}，列表URL: {start_url}")
+            if city_name:
+                print(f"  ✔ {region_name} > {city_name} → area={area_code}，列表URL: {start_url}")
+            else:
+                print(f"  ✔ {region_name} → area={area_code}，列表URL: {start_url}")
+        elif region_name:
+            print(f"  ⚠ 地区 '{region_name}' 未在 regions 列表中找到")
         elif city_name:
-            print(f"  ⚠ 城市 '{city_name}' 未在 config.yaml 的 cities 表中找到 area 代码")
+            print(f"  ⚠ 城市 '{city_name}' 未在 cities 表中配置后缀")
 
         # 从 config 读取翻页参数（CLI 默认值不覆盖 config）
         pages = int(target.get("pages", 1)) if target.get("pages") is not None else args.pages
@@ -659,7 +667,11 @@ def _safe_goto(page, url: str, timeout: int) -> None:
     try:
         page.goto(url, wait_until="networkidle", timeout=timeout)
     except PlaywrightTimeoutError:
+        print(f"  ⚠ networkidle 超时，回退到 domcontentloaded")
         page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+    actual_url = page.url
+    if actual_url != url and actual_url.rstrip("/") != url.rstrip("/"):
+        print(f"  ⚠ 页面发生重定向: {url} → {actual_url}")
 
 
 def _detect_max_page(page) -> int:
@@ -843,19 +855,22 @@ def run_from_config(args: argparse.Namespace) -> None:
     else:
         start_url = urljoin(base_url, "forum.php?mod=forumdisplay&fid=2")
 
-    # 如果指定了城市且有 area 代码，直接构造地区筛选 URL
-    cities = config.get("cities", {})
-    if city_name and city_name in cities:
-        area_code = cities[city_name]
+    # 根据 regions 列表顺序自动计算 area 参数
+    area_code = get_area_code(config, region_name, city_name)
+    if area_code:
         if "?" in start_url:
             start_url = start_url + f"&filter=sortid&sortid=3&searchsort=1&area={area_code}"
         else:
             start_url = start_url + f"?filter=sortid&sortid=3&searchsort=1&area={area_code}"
-        print(f"  ✔ 城市 {city_name} → area={area_code}")
+        if city_name:
+            print(f"  ✔ {region_name} > {city_name} → area={area_code}")
+        else:
+            print(f"  ✔ {region_name} → area={area_code}")
         print(f"  ✔ 列表URL: {start_url}")
+    elif region_name:
+        print(f"  ⚠ 地区 '{region_name}' 未在 regions 列表中找到")
     elif city_name:
-        print(f"  ⚠ 城市 '{city_name}' 未在 config.yaml 的 cities 表中找到 area 代码")
-        print(f"  💡 请在浏览器中从首页点击热门城市，将跳转后 URL 中的 area=X.X 添加到 cities 表")
+        print(f"  ⚠ 城市 '{city_name}' 未在 cities 表中配置后缀")
 
     # 打印任务信息
     location_parts = []
