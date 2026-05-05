@@ -20,12 +20,12 @@ import yaml
 # ---------------------------------------------------------------------------
 DEFAULT_PATTERNS = [
     ("age", re.compile(r"小姐年龄[：:]\s*(\d+)", re.MULTILINE)),
-    ("beauty_score", re.compile(r"小姐颜值[：:]\s*(\d+)\s*分", re.MULTILINE)),
+    ("beauty_score", re.compile(r"小姐颜值[：:]\s*(\d+)", re.MULTILINE)),
     ("price_range", re.compile(r"消费水平[：:]\s*([\d,-]+)", re.MULTILINE)),
     ("services", re.compile(r"服务项目[：:]\s*(.+?)(?:\n\s*(?:联系方式|电话|手机|微信|QQ|详细地址|详情介绍|我要举报|我要收藏))", re.MULTILINE | re.DOTALL)),
     ("yuni_id", re.compile(r"与你号[：:]\s*([a-zA-Z0-9_-]+)", re.MULTILINE)),
     ("telegram", re.compile(r"电报号[：:]\s*(@?[a-zA-Z0-9_-]+)", re.MULTILINE)),
-    ("qq", re.compile(r"(?<!电报)QQ[：:]\s*(\d+)", re.MULTILINE)),
+    ("qq", re.compile(r"(?:QQ[：:]|qq号[：:]|[Qq][Qq]号[：:])\s*(\d+)", re.MULTILINE | re.IGNORECASE)),
     ("wechat", re.compile(r"微信[：:]\s*([a-zA-Z0-9_-]+)", re.MULTILINE)),
     ("phone", re.compile(r"(?:电话号码|手机|电话)[：:]\s*(\d[\d\s-]{6,})", re.MULTILINE)),
     ("address", re.compile(r"详细地址[：:]\s*(.+?)(?:\n|$)", re.MULTILINE)),
@@ -216,6 +216,8 @@ class DetailParser:
         match = re.search(r"(\d+)\s*(?:浏览|阅读|查看)", text)
         if not match:
             match = re.search(r"(?:浏览|阅读|查看)\s*(\d+)", text)
+        if not match:
+            match = re.search(r"\d{4}-\d{2}-\d{2}\s+(\d+)\s", text)
         return match.group(1) if match else ""
 
     @staticmethod
@@ -233,7 +235,8 @@ class DetailParser:
         # 匹配 "广东省 » 深圳市" 格式
         match = re.search(r"([^»\n]+\S)\s*»\s*([^»\n]+\S)", text)
         if match:
-            return match.group(1).strip(), match.group(2).strip()
+            province = re.sub(r"^(?:所属地区|地区)\s*[：:]\s*", "", match.group(1).strip())
+            return province, match.group(2).strip()
         # 备用：匹配单个省市
         match = re.search(r"(\S{2,5}[省市])\s*[»\s]*\s*(\S{2,5}[市]?)", text)
         if match:
@@ -245,6 +248,8 @@ class DetailParser:
         # 清洗服务项目文本（去除标签和多余空格）
         if item.services:
             item.services = re.sub(r"\s+", "，", item.services).strip("，。.；;")
+            item.services = re.sub(r"[,，]\s*(?:我要举报|我要收藏|举报|收藏)\s*", "", item.services)
+            item.services = item.services.strip("，。.；;")
 
         # 清洗手机号码（去除空格和横线）
         if item.phone:

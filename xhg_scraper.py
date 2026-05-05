@@ -120,7 +120,6 @@ def normalize_thread_url(base_url: str, href: str) -> str | None:
         "tid": [tid],
         "fromguid": query.get("fromguid", ["hot"]),
         "extra": query.get("extra", ["page=1"]),
-        "mobile": query.get("mobile", ["2"]),
     }
     return urlunparse(parsed._replace(query=urlencode(clean_query, doseq=True), fragment=""))
 
@@ -150,7 +149,71 @@ def extract_thread_urls(page, current_url: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 地区筛选
+# 从门户首页跳转到地区筛选列表页
+# ---------------------------------------------------------------------------
+
+def navigate_portal_to_region(page, base_url: str, city_name: str, timeout: int = 30000) -> str | None:
+    """
+    从 portal.php 首页的「热门城市」区域点击城市名，跳转到地区筛选后的列表页
+
+    Args:
+        page: Playwright page对象
+        base_url: 网站基础URL（如 https://xhg20260430.xhg303.one/）
+        city_name: 城市名称（如"南京市"、"深圳市"）
+        timeout: 超时毫秒数
+
+    Returns:
+        str | None: 跳转后的列表页URL，失败返回None
+    """
+    portal_url = urljoin(base_url, "portal.php")
+    print(f"  访问首页: {portal_url}")
+    try:
+        page.goto(portal_url, wait_until="networkidle", timeout=timeout)
+    except PlaywrightTimeoutError:
+        page.goto(portal_url, wait_until="domcontentloaded", timeout=timeout)
+
+    page.wait_for_timeout(2000)
+
+    # 在热门城市区域查找城市链接
+    # 尝试多种定位方式
+    clicked = False
+    try:
+        # 方式1: 精确定位「热门城市」区域的链接
+        hot_city_section = page.locator(".hot_city, .city_list, #hot_city, [class*='hot_city']")
+        if hot_city_section.count() > 0:
+            link = hot_city_section.first.locator(f"a:has-text('{city_name}')").first
+            if link.count() > 0:
+                link.click()
+                clicked = True
+
+        # 方式2: 在整个页面中找包含城市名的链接
+        if not clicked:
+            city_link = page.locator(f"a:has-text('{city_name}')").first
+            if city_link.count() > 0:
+                city_link.click()
+                clicked = True
+
+        if not clicked:
+            print(f"  Warning: Could not find city link '{city_name}' on portal page.")
+            return None
+
+        page.wait_for_timeout(2000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=timeout)
+        except PlaywrightTimeoutError:
+            page.wait_for_load_state("domcontentloaded", timeout=timeout)
+
+        current_url = page.url
+        print(f"  ✔ 已跳转到地区筛选列表: {current_url}")
+        return current_url
+
+    except Exception as exc:
+        print(f"  Warning: Failed to navigate from portal to city '{city_name}': {exc}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# 地区筛选（列表页上的点击筛选，保留兼容）
 # ---------------------------------------------------------------------------
 
 def select_region_on_page(page, region_name: str, timeout: int = 10000) -> bool:
@@ -365,8 +428,13 @@ def fetch_pages(args: argparse.Namespace) -> None:
     detail_rows = []
     run_started = datetime.now()
 
+    headless = args.headless
+    if config_path and config_path.exists():
+        config = load_config(str(config_path))
+        headless = headless or config.get("crawl", {}).get("use_headless", False)
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=args.headless)
+        browser = p.chromium.launch(headless=headless)
         context = browser.new_context(storage_state=str(auth_file))
         page = context.new_page()
 
@@ -421,29 +489,45 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
 
     # 加载配置
     config_path = Path(args.config) if args.config else None
-    base_url = DEFAULT_START_URL
+    root_url = DEFAULT_START_URL
     region_name = getattr(args, "region", None)
     city_name = getattr(args, "city", None)
 
+    start_url = args.start_url or root_url
+
+    config = None
     if config_path and config_path.exists():
         config = load_config(str(config_path))
-        base_url = config.get("base_url", DEFAULT_START_URL)
+        root_url = config.get("base_url", DEFAULT_START_URL)
         # 根据配置确定起始URL
         if args.forum and args.forum in config.get("forums", {}):
             forum_config = config["forums"][args.forum]
             list_url = forum_config.get("list_url", "")
             if list_url:
-                base_url = urljoin(config["base_url"], list_url)
-                args.start_url = base_url
+                start_url = urljoin(root_url, list_url)
+
+        # 如果指定了城市且有 area 代码，直接构造地区筛选 URL
+        cities = config.get("cities", {})
+        if city_name and city_name in cities:
+            area_code = cities[city_name]
+            if "?" in start_url:
+                start_url = start_url + f"&filter=sortid&sortid=3&searchsort=1&area={area_code}"
+            else:
+                start_url = start_url + f"?filter=sortid&sortid=3&searchsort=1&area={area_code}"
+            print(f"  ✔ 城市 {city_name} → area={area_code}，列表URL: {start_url}")
+        elif city_name:
+            print(f"  ⚠ 城市 '{city_name}' 未在 config.yaml 的 cities 表中找到 area 代码")
 
     output_base = Path(args.output)
-    start_url = args.start_url or base_url
     all_urls: list[str] = []
     seen = set()
     run_started = datetime.now()
 
+    crawl_cfg = config.get("crawl", {}) if config else {}
+    headless = args.headless or crawl_cfg.get("use_headless", False)
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=args.headless)
+        browser = p.chromium.launch(headless=headless)
         context = browser.new_context(storage_state=str(auth_file))
         page = context.new_page()
 
@@ -452,19 +536,6 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
             list_url = replace_page_number(start_url, page_number)
             print(f"[list {page_number}/{args.pages}] Opening: {list_url}")
             page.goto(list_url, wait_until="networkidle", timeout=args.timeout)
-
-            # 如果指定了地区，点击筛选
-            if region_name and page_number == 1:
-                if select_region_on_page(page, region_name, args.timeout):
-                    print(f"  Region filter applied: {region_name}")
-                else:
-                    print(f"  Region filter failed, continuing with unfiltered list.")
-
-            if city_name and page_number == 1:
-                if select_city_on_page(page, city_name, args.timeout):
-                    print(f"  City filter applied: {city_name}")
-                else:
-                    print(f"  City filter failed, continuing...")
 
             page.wait_for_timeout(1500)
             found = extract_thread_urls(page, list_url)
@@ -520,7 +591,8 @@ def crawl_and_fetch(args: argparse.Namespace) -> None:
         browser.close()
 
     run_ended = datetime.now()
-    run_dir = _make_run_dir(output_base)
+    region_tag = city_name or region_name or "all"
+    run_dir = _make_run_dir(output_base, region_tag)
     _finalize_run(run_dir, summary_rows, detail_rows, {
         "region": region_name or "(不限)",
         "city": city_name or "(不限)",
@@ -655,6 +727,7 @@ def run_from_config(args: argparse.Namespace) -> None:
     output_base = Path(args.output) if args.output else Path(crawl_config.get("output_dir", "output"))
     delay = float(getattr(args, "delay", None) or crawl_config.get("delay", 1.5))
     timeout = int(getattr(args, "timeout", None) or crawl_config.get("timeout", 60000))
+    headless = args.headless or crawl_config.get("use_headless", False)
 
     # 确定起始URL（根据板块）
     if forum_name in config.get("forums", {}):
@@ -662,6 +735,20 @@ def run_from_config(args: argparse.Namespace) -> None:
         start_url = urljoin(base_url, forum_cfg.get("list_url", ""))
     else:
         start_url = urljoin(base_url, "forum.php?mod=forumdisplay&fid=2")
+
+    # 如果指定了城市且有 area 代码，直接构造地区筛选 URL
+    cities = config.get("cities", {})
+    if city_name and city_name in cities:
+        area_code = cities[city_name]
+        if "?" in start_url:
+            start_url = start_url + f"&filter=sortid&sortid=3&searchsort=1&area={area_code}"
+        else:
+            start_url = start_url + f"?filter=sortid&sortid=3&searchsort=1&area={area_code}"
+        print(f"  ✔ 城市 {city_name} → area={area_code}")
+        print(f"  ✔ 列表URL: {start_url}")
+    elif city_name:
+        print(f"  ⚠ 城市 '{city_name}' 未在 config.yaml 的 cities 表中找到 area 代码")
+        print(f"  💡 请在浏览器中从首页点击热门城市，将跳转后 URL 中的 area=X.X 添加到 cities 表")
 
     # 打印任务信息
     location_parts = []
@@ -685,7 +772,7 @@ def run_from_config(args: argparse.Namespace) -> None:
     run_started = datetime.now()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=args.headless)
+        browser = p.chromium.launch(headless=headless)
         context = browser.new_context(storage_state=str(auth_file))
         page = context.new_page()
 
@@ -694,20 +781,6 @@ def run_from_config(args: argparse.Namespace) -> None:
             list_url = replace_page_number(start_url, page_number)
             print(f"[列表 {page_number}/{pages}] {list_url}")
             page.goto(list_url, wait_until="networkidle", timeout=timeout)
-
-            # 省份筛选（仅第一页）
-            if region_name and page_number == 1:
-                if select_region_on_page(page, region_name, timeout):
-                    print(f"  ✔ 已筛选省份: {region_name}")
-                else:
-                    print(f"  ⚠ 省份筛选失败，继续...")
-
-            # 城市筛选（仅第一页，且省份筛选成功后）
-            if city_name and page_number == 1:
-                if select_city_on_page(page, city_name, timeout):
-                    print(f"  ✔ 已筛选城市: {city_name}")
-                else:
-                    print(f"  ⚠ 城市筛选失败，继续...")
 
             page.wait_for_timeout(1500)
             found = extract_thread_urls(page, list_url)
