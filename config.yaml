@@ -40,87 +40,10 @@ forums:
     list_url: "forum.php?mod=forumdisplay&fid=40"
 
 # --------------------------------------------------------------------------
-# 城市 area 后缀（用于构造地区筛选 URL 的 city 部分）
-# area = region在regions列表中的索引 + "." + 城市后缀
-# 例如 江苏省在regions索引=6，南京市后缀=1 → area=6.1
+# 地区配置文件路径（包含省份 + 城市的完整配置）
+# 详见 regions.yaml
 # --------------------------------------------------------------------------
-cities:
-  南京市: "1"
-
-# --------------------------------------------------------------------------
-# 可选省份（用于页面点击筛选，name 须与页面文字一致）
-# --------------------------------------------------------------------------
-regions:
-  - name: "不限"
-    code: ""
-  - name: "北京市"
-    code: "beijing"
-  - name: "上海市"
-    code: "shanghai"
-  - name: "天津市"
-    code: "tianjin"
-  - name: "重庆市"
-    code: "chongqing"
-  - name: "广东省"
-    code: "guangdong"
-  - name: "江苏省"
-    code: "jiangsu"
-  - name: "山东省"
-    code: "shandong"
-  - name: "浙江省"
-    code: "zhejiang"
-  - name: "四川省"
-    code: "sichuan"
-  - name: "河南省"
-    code: "henan"
-  - name: "福建省"
-    code: "fujian"
-  - name: "安徽省"
-    code: "anhui"
-  - name: "湖北省"
-    code: "hubei"
-  - name: "陕西省"
-    code: "shaanxi"
-  - name: "山西省"
-    code: "shanxi"
-  - name: "湖南省"
-    code: "hunan"
-  - name: "江西省"
-    code: "jiangxi"
-  - name: "广西"
-    code: "guangxi"
-  - name: "贵州省"
-    code: "guizhou"
-  - name: "云南省"
-    code: "yunnan"
-  - name: "河北省"
-    code: "hebei"
-  - name: "辽宁省"
-    code: "liaoning"
-  - name: "吉林省"
-    code: "jilin"
-  - name: "黑龙江省"
-    code: "heilongjiang"
-  - name: "甘肃省"
-    code: "gansu"
-  - name: "新疆"
-    code: "xinjiang"
-  - name: "宁夏"
-    code: "ningxia"
-  - name: "内蒙古"
-    code: "neimenggu"
-  - name: "西藏"
-    code: "xizang"
-  - name: "海南省"
-    code: "hainan"
-  - name: "青海省"
-    code: "qinghai"
-  - name: "香港"
-    code: "hongkong"
-  - name: "台湾"
-    code: "taiwan"
-  - name: "澳门"
-    code: "macau"
+regions_file: "regions.yaml"
 
 # --------------------------------------------------------------------------
 # 详情页提取字段

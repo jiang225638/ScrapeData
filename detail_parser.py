@@ -285,13 +285,13 @@ class DetailParser:
 
 def load_config(config_path: Optional[str] = None) -> dict:
     """
-    加载全局配置文件
+    加载全局配置文件，并自动合并 regions.yaml 中的地区数据
 
     Args:
         config_path: 配置文件路径，默认为项目根目录下的 config.yaml
 
     Returns:
-        dict: 配置字典
+        dict: 配置字典（已合并 regions 数据）
     """
     if config_path is None:
         config_path = Path(__file__).parent / "config.yaml"
@@ -301,7 +301,17 @@ def load_config(config_path: Optional[str] = None) -> dict:
     if not config_path.exists():
         raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
-    return yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    regions_file = config.get("regions_file", "")
+    if regions_file and "regions" not in config:
+        regions_path = config_path.parent / regions_file
+        if regions_path.exists():
+            regions_data = yaml.safe_load(regions_path.read_text(encoding="utf-8"))
+            if regions_data and "regions" in regions_data:
+                config["regions"] = regions_data["regions"]
+
+    return config
 
 
 def get_region_list(config: dict) -> list[dict]:
@@ -339,7 +349,7 @@ def get_region_by_name(config: dict, name: str) -> Optional[dict]:
         name: 地区名称（如"北京市"、"广东省"）
 
     Returns:
-        Optional[dict]: 地区配置项，找不到返回None
+        Optional[dict]: 地区配置项（含 cities 列表），找不到返回None
     """
     for region in config.get("regions", []):
         if region.get("name") == name or region.get("code") == name:
@@ -347,19 +357,37 @@ def get_region_by_name(config: dict, name: str) -> Optional[dict]:
     return None
 
 
+def get_cities_for_region(config: dict, region_name: str) -> list[dict]:
+    """
+    获取指定省份下的城市列表
+
+    Args:
+        config: 配置字典（已合并 regions 数据）
+        region_name: 省份名称（如"江苏省"、"广东省"）
+
+    Returns:
+        list[dict]: 城市列表，每项包含 name 和 suffix 字段
+    """
+    region = get_region_by_name(config, region_name)
+    if region:
+        return region.get("cities", [])
+    return []
+
+
 def get_area_code(config: dict, region_name: str = "", city_name: str = "") -> str:
     """
-    根据 regions 列表顺序和 cities 表自动计算 area 参数值
+    根据 regions 列表顺序和城市 suffix 自动计算 area 参数值
 
     规则：
       - regions 列表中"不限"索引为0（跳过），北京市索引=1 → area=1，上海市=2，依此类推
-      - 若指定 city_name，则 area = region_index + "." + cities[city_name]
-        例如 江苏省索引=6，南京市后缀="1" → area=6.1
+      - 若指定 city_name，则在该省份的 cities 列表中查找 suffix
+        area = region_index + "." + city_suffix
+        例如 江苏省索引=6，南京市 suffix="1" → area=6.1
 
     Args:
-        config: 配置字典
+        config: 配置字典（已合并 regions 数据）
         region_name: 省份/地区名称，如"北京市"、"江苏省"
-        city_name: 城市名称，如"南京市"
+        city_name: 城市名称，如"南京市"、"东城区"
 
     Returns:
         str: area 参数值，如 "6"、"6.1"，无匹配返回 ""
@@ -368,12 +396,13 @@ def get_area_code(config: dict, region_name: str = "", city_name: str = "") -> s
         return ""
 
     regions = config.get("regions", [])
-    cities = config.get("cities", {})
 
     region_idx = 0
+    matched_region = None
     for i, r in enumerate(regions):
         if r.get("name") == region_name:
             region_idx = i
+            matched_region = r
             break
 
     if region_idx <= 0:
@@ -381,9 +410,13 @@ def get_area_code(config: dict, region_name: str = "", city_name: str = "") -> s
 
     area = str(region_idx)
 
-    if city_name and city_name in cities:
-        city_suffix = str(cities[city_name]).strip()
-        if city_suffix:
-            area = f"{area}.{city_suffix}"
+    if city_name and matched_region:
+        region_cities = matched_region.get("cities", [])
+        for city in region_cities:
+            if city.get("name") == city_name:
+                city_suffix = str(city.get("suffix", "")).strip()
+                if city_suffix:
+                    area = f"{area}.{city_suffix}"
+                break
 
     return area

@@ -1,6 +1,0 @@
-output/
-auth_state.json
-__pycache__/
-*.pyc
-.coverage
-.tmp/
